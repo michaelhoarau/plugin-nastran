@@ -27,6 +27,7 @@ BDF_EXTENSIONS = {".bdf", ".nas", ".dat", ".inc", ".fem", ".blk", ".txt", ""}
 # ================================================================
 
 import io
+import json
 import os
 import shutil
 import tempfile
@@ -70,6 +71,36 @@ def _available_bdfs(folder):
 def _available_csvs(folder):
     return [p for p in _paths(folder)
             if p.lower().endswith(".csv") and "displacement" in PurePosixPath(p).name.lower()]
+
+
+def _available_stress_csvs(folder):
+    return [p for p in _paths(folder)
+            if p.lower().endswith(".csv") and "stress" in PurePosixPath(p).name.lower()]
+
+
+def _read_stress(folder, csv_path):
+    csv_path = _validate_selected(folder, csv_path, _available_stress_csvs(folder))
+    with folder.get_download_stream(csv_path) as stream:
+        df = pd.read_csv(stream, low_memory=False)
+    df.columns = [str(c).lower() for c in df.columns]
+    if "element_id" not in df.columns:
+        raise ValueError("Stress CSV must contain an element_id column")
+    return df
+
+
+def _stress_components(df):
+    identifiers = {"element_id", "node_id", "grid_id", "subcase", "step_index", "step_value",
+                   "ply", "ply_id", "layer", "layer_id", "fiber_distance", "fiber_curvature"}
+    return [c for c in df.columns if c not in identifiers
+            and pd.to_numeric(df[c], errors="coerce").notna().any()]
+
+
+def _stress_layers(df):
+    for col in ("ply_id", "ply", "layer_id", "layer", "fiber_distance", "fiber_curvature"):
+        if col in df.columns and df[col].notna().any():
+            return [{"value": json.dumps({"column": col, "value": str(v)}),
+                     "label": f"{col}: {v}"} for v in df[col].dropna().unique()]
+    return [{"value": json.dumps({"column": "", "value": ""}), "label": "All locations"}]
 
 
 def _validate_selected(folder, filename, allowed_paths):
@@ -180,7 +211,7 @@ def _surface_and_beams(model):
         if kind.startswith("CTRIA") and len(ids) >= 3:
             face = ids[:3]
             if all(x is not None for x in face):
-                shells.append(tuple(map(int, face)))
+                shells.append((int(_eid), tuple(map(int, face))))
                 stats["shell_elements"] += 1
                 if len(ids) > 3:
                     stats["linearized_elements"] += 1
@@ -189,7 +220,7 @@ def _surface_and_beams(model):
         elif kind.startswith("CQUAD") and len(ids) >= 4:
             face = ids[:4]
             if all(x is not None for x in face):
-                shells.append(tuple(map(int, face)))
+                shells.append((int(_eid), tuple(map(int, face))))
                 stats["shell_elements"] += 1
                 if len(ids) > 4:
                     stats["linearized_elements"] += 1
@@ -200,7 +231,7 @@ def _surface_and_beams(model):
             if all(x is not None for x in corners):
                 stats["solid_elements"] += 1
                 for spec in SOLID_FACE_INDICES[kind]:
-                    solids.append(tuple(int(corners[i]) for i in spec))
+                    solids.append((int(_eid), tuple(int(corners[i]) for i in spec)))
             else:
                 unsupported[kind] += 1
         elif kind in LINE_ELEMENTS and len(ids) >= 2 and all(x is not None for x in ids[:2]):
@@ -210,8 +241,8 @@ def _surface_and_beams(model):
             unsupported[kind] += 1
 
     # Keep only external faces of solids, not internal shared faces.
-    face_counts = Counter(tuple(sorted(face)) for face in solids)
-    exposed_solids = [face for face in solids if face_counts[tuple(sorted(face))] == 1]
+    face_counts = Counter(tuple(sorted(face)) for _, face in solids)
+    exposed_solids = [(eid, face) for eid, face in solids if face_counts[tuple(sorted(face))] == 1]
     stats["external_solid_faces"] = len(exposed_solids)
     stats["ignored_elements"] = sum(unsupported.values())
     return shells + exposed_solids, beams, stats, unsupported
@@ -219,7 +250,7 @@ def _surface_and_beams(model):
 
 def _mesh_payload(model, df):
     faces, beam_segments, stats, unsupported = _surface_and_beams(model)
-    visible = {nid for f in faces for nid in f} | {nid for line in beam_segments for nid in line}
+    visible = {nid for _, f in faces for nid in f} | {nid for line in beam_segments for nid in line}
     visible.intersection_update(model.nodes.keys())
     if not visible:
         raise ValueError("No supported shell/solid/beam geometry to display. Supported types: CTRIA*, CQUAD*, CTETRA, CHEXA, CPENTA, CPYRAM, CBAR, CBEAM, CROD, CONROD, CTUBE, CBUSH.")
@@ -275,12 +306,14 @@ def _mesh_payload(model, df):
 
     triangles = []
     edges = set()
-    for face in faces:
+    triangle_elements = []
+    for eid, face in faces:
         if any(nid not in index for nid in face):
             continue
         verts = [index[nid] for nid in face]
         for k in range(1, len(verts) - 1):
             triangles.append([verts[0], verts[k], verts[k + 1]])
+            triangle_elements.append(eid)
         for a, b in zip(verts, verts[1:] + verts[:1]):
             edges.add(tuple(sorted((a, b))))
     for a, b in beam_segments:
@@ -314,6 +347,7 @@ def _mesh_payload(model, df):
         "xyz": coords,
         "translations": vectors,
         "triangles": triangles,
+        "triangle_elements": triangle_elements,
         "edges": all_edges,
         "metadata": {
             "bdf_nodes_total": len(model.nodes),
@@ -346,7 +380,8 @@ def available_mesh_files():
         bdf = _folder(BDF_FOLDER_ID)
         displacements = _folder(DISPLACEMENTS_FOLDER_ID)
         return jsonify({"bdf_files": _available_bdfs(bdf),
-                        "displacement_files": _available_csvs(displacements)})
+                        "displacement_files": _available_csvs(displacements),
+                        "stress_files": _available_stress_csvs(displacements)})
     except Exception as exc:
         return _error_response(exc)
 
@@ -361,6 +396,16 @@ def available_displacement_steps():
         return _error_response(exc)
 
 
+@app.route("/api/stress/options", methods=["GET"])
+def available_stress_options():
+    try:
+        df = _read_stress(_folder(DISPLACEMENTS_FOLDER_ID), request.args.get("csv", ""))
+        return jsonify({"steps": _unique_steps(df), "components": _stress_components(df),
+                        "layers": _stress_layers(df)})
+    except Exception as exc:
+        return _error_response(exc)
+
+
 @app.route("/api/mesh", methods=["POST"])
 def mesh_and_displacements():
     try:
@@ -369,14 +414,55 @@ def mesh_and_displacements():
         csv_name = body.get("displacements", "")
         selection = body.get("step")
         bdf_folder = _folder(BDF_FOLDER_ID)
-        df = _read_displacements(_folder(DISPLACEMENTS_FOLDER_ID), csv_name)
-        df = _filter_step(df, selection)
+        results_folder = _folder(DISPLACEMENTS_FOLDER_ID)
+        if csv_name:
+            df = _filter_step(_read_displacements(results_folder, csv_name), selection)
+        else:
+            df = pd.DataFrame(columns=["node_id", "t1", "t2", "t3"])
+        stress_df = None
+        if body.get("color_mode") == "stress":
+            stress_df = _filter_step(_read_stress(results_folder, body.get("stress_csv", "")),
+                                     body.get("stress_step"))
         with tempfile.TemporaryDirectory(prefix="dataiku_fea_webapp_") as work:
             bdf_filename = _materialize_bdf(bdf_folder, bdf_name, work)
             model = read_bdf(str(bdf_filename), xref=True, validate=False, debug=False)
             output = _mesh_payload(model, df)
+        output["metadata"]["has_displacements"] = bool(csv_name)
+        if not csv_name:
+            output["metadata"]["warnings"] = [w for w in output["metadata"]["warnings"]
+                                               if "no displacement row" not in w]
+        if stress_df is not None:
+            component = body.get("stress_component", "")
+            aggregate = body.get("stress_aggregate", "mean")
+            if component not in _stress_components(stress_df) or aggregate not in {"mean", "max_abs"}:
+                raise ValueError("Invalid stress component or aggregation")
+            layer = body.get("stress_layer", "")
+            allowed_layers = {entry["value"]: entry["label"] for entry in _stress_layers(stress_df)}
+            if layer not in allowed_layers:
+                raise ValueError("Invalid stress layer")
+            layer_spec = json.loads(layer)
+            if layer_spec["column"]:
+                col = layer_spec["column"]
+                stress_df = stress_df.loc[stress_df[col].astype(str).eq(layer_spec["value"])].copy()
+            stress_df = stress_df.copy()
+            stress_df["element_id"] = pd.to_numeric(stress_df["element_id"], errors="coerce")
+            stress_df[component] = pd.to_numeric(stress_df[component], errors="coerce")
+            stress_df = stress_df.loc[np.isfinite(stress_df["element_id"]) & np.isfinite(stress_df[component])]
+            groups = stress_df.groupby("element_id")[component]
+            values = groups.mean() if aggregate == "mean" else groups.agg(lambda x: x.loc[x.abs().idxmax()])
+            triangle_values = [float(values[eid]) if eid in values else None for eid in output.pop("triangle_elements")]
+            matched = [v for v in triangle_values if v is not None]
+            if not matched:
+                raise ValueError("No stress values match the displayed elements")
+            output["stress"] = {"component": component, "layer": allowed_layers[layer],
+                                "aggregate": aggregate, "triangle_values": triangle_values,
+                                "min": min(matched), "max": max(matched)}
+            output["metadata"]["stress_colored_triangles"] = len(matched)
+        else:
+            output.pop("triangle_elements")
         output["files"] = {"bdf": bdf_name, "displacements": csv_name,
-                           "step": selection or _unique_steps(df)[0]}
+                           "stress_csv": body.get("stress_csv", ""),
+                           "step": selection}
         return jsonify(output)
     except Exception as exc:
         return _error_response(exc)
