@@ -1,0 +1,105 @@
+<!-- Dataiku Standard WebApp: HTML editor -->
+<!-- Plotly needs to be reachable from the WebApp user's browser. -->
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+
+<div class="fea-app">
+  <header class="fea-topbar">
+    <div>
+      <div class="fea-eyebrow">FINITE ELEMENT POST-PROCESSING</div>
+      <h1>Mesh, displacement &amp; stress viewer</h1>
+      <p>Inspect deformations and element-level stress contours from OP2 CSVs on a BDF mesh.</p>
+    </div>
+    <span class="fea-version">Dataiku · pyNastran · Plotly</span>
+  </header>
+
+  <main class="fea-main">
+    <aside class="fea-side">
+      <section class="fea-panel">
+        <h2>1. Select files</h2>
+        <label for="fea-bdf">Geometry (BDF)</label>
+        <select id="fea-bdf"><option value="">Loading available BDF files…</option></select>
+        <label for="fea-csv">Displacements (optional for stress-only)</label>
+        <select id="fea-csv"><option value="">Loading displacement CSVs…</option></select>
+        <label for="fea-step">Displacement subcase / step</label>
+        <select id="fea-step"><option value="">Choose displacement CSV first</option></select>
+        <label for="fea-stress-csv">Stress results (CSV)</label>
+        <select id="fea-stress-csv"><option value="">Loading stress CSVs…</option></select>
+        <div id="fea-stress-fields" hidden>
+          <label for="fea-stress-step">Stress subcase / step</label>
+          <select id="fea-stress-step"></select>
+          <label for="fea-component">Stress component</label>
+          <select id="fea-component"></select>
+          <label for="fea-layer">Ply / plate surface</label>
+          <select id="fea-layer"></select>
+          <label for="fea-aggregate">Element aggregation</label>
+          <select id="fea-aggregate">
+            <option value="mean">Mean of locations on selected ply/surface</option>
+            <option value="max_abs">Maximum absolute value (retain sign)</option>
+          </select>
+          <p class="fea-hint">Color is constant per element. For plates, select top/bottom surface; for composites, select a ply. Stress units follow the OP2 solver.</p>
+        </div>
+        <button id="fea-load" type="button" class="fea-primary">Visualize mesh</button>
+        <button id="fea-refresh" type="button" class="fea-secondary">Refresh file list</button>
+      </section>
+
+      <section class="fea-panel">
+        <h2>2. Display settings</h2>
+        <label for="fea-color">Color by</label>
+        <select id="fea-color">
+          <option value="mag">Displacement magnitude |U|</option>
+          <option value="ux">Translation Ux (basic)</option>
+          <option value="uy">Translation Uy (basic)</option>
+          <option value="uz">Translation Uz (basic)</option>
+          <option value="stress">Stress contour (selected component / ply)</option>
+        </select>
+        <div class="fea-scale-header">
+          <label for="fea-scale">Deformation scale</label>
+          <button id="fea-auto" type="button" class="fea-text-button">Auto scale</button>
+        </div>
+        <div class="fea-scale-line">
+          <input id="fea-scale" type="range" min="0" max="10" step="0.1" value="1" />
+          <input id="fea-scale-value" type="number" min="0" step="any" value="1" aria-label="Deformation scale factor" />
+        </div>
+        <div class="fea-check"><label><input type="checkbox" id="fea-original" checked /> Show undeformed reference</label></div>
+        <div class="fea-check"><label><input type="checkbox" id="fea-wireframe" checked /> Show element edges</label></div>
+        <div class="fea-check"><label><input type="checkbox" id="fea-nodes" /> Show node markers (small meshes)</label></div>
+        <p class="fea-hint">The scale changes deformation only, not the contour data. Select Stress coloring and click Visualize mesh after changing stress options.</p>
+      </section>
+
+      <section class="fea-panel fea-metrics" id="fea-metrics">
+        <h2>Mesh summary</h2>
+        <div class="fea-metric"><span>Mesh GRID points</span><strong id="fea-total-nodes">—</strong></div>
+        <div class="fea-metric"><span>Mesh elements</span><strong id="fea-total-elements">—</strong></div>
+        <div class="fea-metric"><span>Rendered nodes</span><strong id="fea-visible-nodes">—</strong></div>
+        <div class="fea-metric"><span>Matched displacements</span><strong id="fea-matched">—</strong></div>
+        <div class="fea-metric"><span>Faces / triangles</span><strong id="fea-faces">—</strong></div>
+        <div class="fea-metric"><span>Max |U|</span><strong id="fea-max-u">—</strong></div>
+        <div class="fea-metric"><span>Stress-colored triangles</span><strong id="fea-stress-covered">—</strong></div>
+        <div class="fea-metric"><span>Stress range</span><strong id="fea-stress-range">—</strong></div>
+      </section>
+    </aside>
+
+    <section class="fea-viewer-panel">
+      <div class="fea-chart-heading">
+        <div>
+          <h2>3D visualization</h2>
+          <p id="fea-caption">Select a BDF and an OP2 displacement or stress CSV to begin.</p>
+        </div>
+        <span id="fea-status" class="fea-status">Not loaded</span>
+      </div>
+      <div id="fea-message" class="fea-message" hidden></div>
+      <div id="fea-warnings" class="fea-warnings" hidden></div>
+      <div id="fea-chart" role="img" aria-label="Interactive three-dimensional finite-element mesh and displacement contours">
+        <div class="fea-placeholder">
+          <div class="fea-placeholder-icon">⬡</div>
+          <strong>Your mesh will appear here</strong>
+          <p>Rotate, zoom and pan the 3D view once loaded.</p>
+        </div>
+      </div>
+      <footer class="fea-footer">
+        <span>Geometry: BDF · Displacements/stresses: OP2 CSV · Coordinates: basic XYZ</span>
+        <span>Visualization only — not a substitute for engineering validation</span>
+      </footer>
+    </section>
+  </main>
+</div>

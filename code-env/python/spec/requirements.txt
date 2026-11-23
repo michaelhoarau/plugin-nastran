@@ -1,0 +1,12 @@
+# Nastran geometry and simulation results
+pyNastran
+numpy
+pandas
+scipy
+
+# Python WebApp backend
+Flask
+MarkupSafe
+
+# pyNastran logging dependency
+cpylog
